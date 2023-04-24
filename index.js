@@ -61,11 +61,13 @@ app.get("/", (req, res) => {
 
 //posts route
 app.get("/posts/all", async (req, res) => {
+  console.log("Sending all posts to client...");
   const posts = await postSchema.find({}).sort({ createdAt: -1 });
   res.json(posts);
 });
 
 app.post("/posts", authenticateToken, async (req, res) => {
+  console.log(`Creating post for user ${req.user.userID}...`);
   const { content, createdAt } = req.body;
   const userID = req.user.userID;
 
@@ -91,7 +93,7 @@ app.post("/posts", authenticateToken, async (req, res) => {
 });
 
 app.get("/user/:id", async (req, res) => {
-  console.log(req.params.id);
+  console.log(`Sending user data for User ${req.params.id} to client... `);
   const user = await userSchema.findOne({ _id: req.params.id });
   if (user) {
     res.json({
@@ -111,7 +113,8 @@ app.get("/user/:id", async (req, res) => {
 });
 
 app.get("/user/:id/posts", async (req, res) => {
-  console.log(req.params.id);
+  console.log(`Sending posts for User ${req.params.id} to client... `);
+
   const posts = await postSchema.find({}).sort({
     createdAt: -1,
   });
@@ -122,6 +125,7 @@ app.get("/user/:id/posts", async (req, res) => {
 });
 
 app.post("/register", async (req, res) => {
+  console.log("Creating new user...");
   const { username, email, password } = req.body;
 
   const data = await userSchema.findOne({ username });
@@ -152,7 +156,37 @@ app.post("/register", async (req, res) => {
   }
 });
 
+app.post("/login", async (req, res) => {
+  console.log("Logging in user...");
+  const { username, password } = req.body;
+
+  const data = userSchema.findOne({ username });
+  if (data) {
+    const user = await data;
+    const isPasswordValid = await comparePassword(password, user.password);
+    if (isPasswordValid) {
+      user.refreshToken = generateRefreshToken(user._id.toString());
+      const newUser = await user.save();
+      res.json({
+        code: 200,
+        message: "User logged in successfully",
+        accessToken: generateAccessToken(user._id.toString()),
+        refreshToken: newUser.refreshToken,
+        username: newUser.username,
+        userID: newUser._id.toString(),
+        profileImage: newUser.profileImage,
+      });
+    } else {
+      res.json({
+        code: 400,
+        message: "Invalid credentials",
+      });
+    }
+  }
+});
+
 app.post("/token", (req, res) => {
+  console.log("Generating new access token...");
   const refreshToken = req.body.token;
 
   if (refreshToken == null) {
@@ -173,6 +207,7 @@ app.post("/token", (req, res) => {
 });
 
 app.delete("/logout", (req, res) => {
+  console.log("Logging out user...");
   const refreshToken = req.body.token;
   if (refreshToken == null) {
     res.sendStatus(401);
@@ -187,11 +222,12 @@ app.delete("/logout", (req, res) => {
 
 //socket.io
 io.on("connection", (socket) => {
-  console.log("user connected" + " " + socket.id);
+  console.log("user connected" + " " + socket.id + " " + socket.user.userID);
   socket.on("disconnect", () => {
     console.log("user disconnected");
   });
   socket.on("newPost", async (data) => {
+    console.log("New post created");
     const { content, createdAt } = data;
     const userID = socket.user.userID;
 
@@ -214,6 +250,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("like", async (data) => {
+    console.log("Like added");
     const post = await postSchema.findOne({ _id: data.postID });
     if (post.likes.includes(socket.user.userID)) {
       return;
@@ -225,6 +262,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("unlike", async (data) => {
+    console.log("Like removed");
     const post = await postSchema.findOne({ _id: data.postID });
 
     if (!post.likes.includes(data.userID)) {
@@ -247,13 +285,20 @@ const bcrypt = require("bcrypt");
 const saltRounds = 10;
 
 async function hashPassword(password) {
+  console.log("Hashing password...");
   return await bcrypt.hash(password, saltRounds);
+}
+
+async function comparePassword(password, hash) {
+  console.log("Comparing password...");
+  return await bcrypt.compare(password, hash);
 }
 
 //generate access token
 const jwt = require("jsonwebtoken");
 
 function generateAccessToken(userID) {
+  console.log("Generating access token...");
   const accessToken = jwt.sign(
     { userID: userID },
     process.env.ACCESS_TOKEN_SECRET,
@@ -265,6 +310,7 @@ function generateAccessToken(userID) {
 }
 
 function generateRefreshToken(userID) {
+  console.log("Generating refresh token...");
   const refreshToken = jwt.sign(
     {
       userID: userID,
@@ -276,6 +322,7 @@ function generateRefreshToken(userID) {
 
 //authenticate requests
 function authenticateToken(req, res, next) {
+  console.log("Authenticating request...");
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
   console.log(token);
