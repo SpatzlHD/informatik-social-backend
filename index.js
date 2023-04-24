@@ -4,6 +4,32 @@ const app = express();
 const cors = require("cors");
 const bodyParser = require("body-parser");
 
+//init socket.io
+const http = require("http");
+const server = http.createServer(app);
+const io = require("socket.io")(server, {
+  cors: {
+    origin: "http://localhost:3000",
+  },
+});
+io.use((socket, next) => {
+  if (socket.handshake.auth && socket.handshake.auth.token) {
+    jwt.verify(
+      socket.handshake.auth.token,
+      process.env.ACCESS_TOKEN_SECRET,
+      (err, user) => {
+        if (err) {
+          return next(new Error("Authentication error"));
+        }
+        socket.user = user;
+        next();
+      }
+    );
+  } else {
+    next(new Error("Authentication error"));
+  }
+});
+
 //middlewares
 
 app.use(
@@ -27,7 +53,6 @@ const userSchema = require("./schemas/user");
 const postSchema = require("./schemas/post");
 
 //other packages
-const axios = require("axios");
 
 //home route
 app.get("/", (req, res) => {
@@ -36,7 +61,7 @@ app.get("/", (req, res) => {
 
 //posts route
 app.get("/posts/all", async (req, res) => {
-  const posts = await postSchema.find({});
+  const posts = await postSchema.find({}).sort({ createdAt: -1 });
   res.json(posts);
 });
 
@@ -65,6 +90,37 @@ app.post("/posts", authenticateToken, async (req, res) => {
   });
 });
 
+app.get("/user/:id", async (req, res) => {
+  console.log(req.params.id);
+  const user = await userSchema.findOne({ _id: req.params.id });
+  if (user) {
+    res.json({
+      code: 200,
+      message: "User found",
+      username: user.username,
+      profileImage: user.profileImage,
+      verified: user.verified,
+      posts: user.posts,
+    });
+  } else {
+    res.json({
+      code: 404,
+      message: "User not found",
+    });
+  }
+});
+
+app.get("/user/:id/posts", async (req, res) => {
+  console.log(req.params.id);
+  const posts = await postSchema.find({}).sort({
+    createdAt: -1,
+  });
+  const filteredPosts = posts.filter((post) => post.user.id == req.params.id);
+  console.log(filteredPosts);
+
+  res.json(filteredPosts);
+});
+
 app.post("/register", async (req, res) => {
   const { username, email, password } = req.body;
 
@@ -90,7 +146,7 @@ app.post("/register", async (req, res) => {
       accessToken: generateAccessToken(newUser._id.toString()),
       refreshToken: newUser2.refreshToken,
       username: newUser2.username,
-
+      userID: newUser2._id.toString(),
       profileImage: newUser2.profileImage,
     });
   }
@@ -98,6 +154,7 @@ app.post("/register", async (req, res) => {
 
 app.post("/token", (req, res) => {
   const refreshToken = req.body.token;
+
   if (refreshToken == null) {
     res.sendStatus(401);
   }
@@ -110,7 +167,7 @@ app.post("/token", (req, res) => {
       res.sendStatus(403);
     }
     const accessToken = generateAccessToken(user.userID);
-    console.log(user.userID);
+
     res.json({ accessToken: accessToken });
   });
 });
@@ -128,8 +185,60 @@ app.delete("/logout", (req, res) => {
   });
 });
 
+//socket.io
+io.on("connection", (socket) => {
+  console.log("user connected" + " " + socket.id);
+  socket.on("disconnect", () => {
+    console.log("user disconnected");
+  });
+  socket.on("newPost", async (data) => {
+    const { content, createdAt } = data;
+    const userID = socket.user.userID;
+
+    const post = await postSchema.create({
+      content: content,
+      createdAt: createdAt,
+    });
+    const user = await userSchema.findOne({ _id: userID });
+    user.posts.push(post._id);
+    await user.save();
+    post.user = {
+      username: user.username,
+      profileImage: user.profileImage,
+      id: user._id,
+      verified: user.verified,
+    };
+
+    await post.save();
+    io.emit("newPostData", post);
+  });
+
+  socket.on("like", async (data) => {
+    const post = await postSchema.findOne({ _id: data.postID });
+    if (post.likes.includes(socket.user.userID)) {
+      return;
+    }
+    post.likes.push(socket.user.userID);
+    const newPost = await post.save();
+
+    io.emit("likeAdd", newPost);
+  });
+
+  socket.on("unlike", async (data) => {
+    const post = await postSchema.findOne({ _id: data.postID });
+
+    if (!post.likes.includes(data.userID)) {
+      return;
+    }
+
+    post.likes.splice(post.likes.indexOf(data.userID), 1);
+    const newPost = await post.save();
+    io.emit("likeRemove", newPost);
+  });
+});
+
 //listen on port 3001
-app.listen(3001, () => {
+server.listen(3001, () => {
   console.log("Server started on port 3001");
 });
 

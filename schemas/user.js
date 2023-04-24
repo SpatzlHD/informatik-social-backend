@@ -7,7 +7,7 @@ const userSchema = new Schema({
   profileImage: String,
   createdAt: { type: Date, default: new Date().toISOString() },
   refreshToken: String,
-
+  verified: { type: Boolean, default: false },
   posts: { type: Array, default: [] },
 });
 
